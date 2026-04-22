@@ -1,0 +1,54 @@
+@import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+.pixel-font {
+  font-family: 'Press Start 2P', cursive;
+  letter-spacing: 0.5px;
+  line-height: 1.5;
+}
+
+::-webkit-scrollbar { 
+  width: 12px; 
+  height: 12px; 
+}
+::-webkit-scrollbar-track { 
+  background: #E5CBA8; 
+  border-left: 4px solid #5A3A22; 
+}
+::-webkit-scrollbar-thumb { 
+  background: #FFAD60; 
+  border: 4px solid #5A3A22; 
+}
+::-webkit-scrollbar-corner { 
+  background: #5A3A22; 
+}
+
+.pixel-checkerboard {
+  background-color: #FFE0B2;
+  background-image: 
+    linear-gradient(45deg, #FFAD60 25%, transparent 25%, transparent 75%, #FFAD60 75%, #FFAD60),
+    linear-gradient(45deg, #FFAD60 25%, transparent 25%, transparent 75%, #FFAD60 75%, #FFAD60);
+  background-size: 20px 20px;
+  background-position: 0 0, 10px 10px;
+  opacity: 0.3;
+}
+
+input[type=range] {
+  -webkit-appearance: none;
+  width: 100%;
+  background: #5A3A22;
+  height: 8px;
+  outline: none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 24px;
+  background: #FFAD60;
+  border: 4px solid #5A3A22;
+  cursor: pointer;
+}
