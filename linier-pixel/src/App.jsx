@@ -47,6 +47,8 @@ export default function App() {
   const [bgColor, setBgColor] = useState('#000000');
   const [opacity, setOpacity] = useState(1);
   const [includeStroke, setIncludeStroke] = useState(true);
+  const [exportMode, setExportMode] = useState('hybrid'); 
+  
   const [svgInput, setSvgInput] = useState('');
   const [xmlOutput, setXmlOutput] = useState('');
   const [showOutput, setShowOutput] = useState(false);
@@ -56,49 +58,38 @@ export default function App() {
   const fileInputRef = useRef(null);
   const ratios = ['Auto (From SVG)', '1:1', '16:9', '9:16', '4:5', '4:3'];
 
-  // ALGORITMA SAKTI: PENDETEKSI SHAPE DARI KODE DALAMAN <path>
+  // SHAPE DETECTOR
   const detectPathShape = (d) => {
-    if (!d) return "path";
+    if (!d) return "vectorart";
     let norm = d.replace(/([a-zA-Z])/g, ' $1 ').trim().split(/\s+/);
     
-    // Kalau ada kurva, anggap sebagai Roundrect / Circle
-    const hasCurve = /[CQAcaq]/.test(d);
-    if (hasCurve) {
-        // Kalau bentuknya terlalu rumit (kurvanya banyak banget), jadikan path murni
-        const cCount = (d.match(/[CQAcaq]/g) || []).length;
-        if (cCount > 8) return "path"; 
+    if (/[CQAcaq]/.test(d)) {
+        if ((d.match(/[CQAcaq]/g) || []).length > 8) return "vectorart"; 
         return "roundrect";
     }
     
-    let pts = [];
-    let currentX = 0, currentY = 0;
+    let pts = []; let cx=0, cy=0;
     for(let i=0; i<norm.length; i++) {
         let c = norm[i].toUpperCase();
-        if(c==='M' || c==='L') { 
-            currentX = parseFloat(norm[i+1]); currentY = parseFloat(norm[i+2]);
-            pts.push({x: currentX, y: currentY}); i+=2; 
-        }
-        else if(c==='H') { currentX = parseFloat(norm[i+1]); pts.push({x: currentX, y: currentY}); i++; }
-        else if(c==='V') { currentY = parseFloat(norm[i+1]); pts.push({x: currentX, y: currentY}); i++; }
+        if(c==='M' || c==='L') { cx = parseFloat(norm[i+1]); cy = parseFloat(norm[i+2]); pts.push({x:cx, y:cy}); i+=2; }
+        else if(c==='H') { cx = parseFloat(norm[i+1]); pts.push({x:cx, y:cy}); i++; }
+        else if(c==='V') { cy = parseFloat(norm[i+1]); pts.push({x:cx, y:cy}); i++; }
     }
     
-    let uniquePts = [];
+    let uPts = [];
     pts.forEach(p => {
-        if(uniquePts.length === 0) uniquePts.push(p);
+        if(uPts.length === 0) uPts.push(p);
         else {
-            let last = uniquePts[uniquePts.length-1];
-            // Cek apakah jarak titiknya lumayan jauh (bukan titik dobel)
-            if(Math.abs(p.x - last.x) > 1 || Math.abs(p.y - last.y) > 1) {
-                let first = uniquePts[0];
-                if(Math.abs(p.x - first.x) > 1 || Math.abs(p.y - first.y) > 1) uniquePts.push(p);
+            let lst = uPts[uPts.length-1];
+            if(Math.abs(p.x - lst.x) > 1 || Math.abs(p.y - lst.y) > 1) {
+                if(Math.abs(p.x - uPts[0].x) > 1 || Math.abs(p.y - uPts[0].y) > 1) uPts.push(p);
             }
         }
     });
 
-    // Otomatis menetapkan s=".triangle" atau s=".rect" berdasarkan sudut!
-    if (uniquePts.length === 3) return "triangle";
-    if (uniquePts.length === 4) return "rect";
-    return "path";
+    if (uPts.length === 3) return "triangle";
+    if (uPts.length === 4) return "rect";
+    return "vectorart";
   };
 
   useEffect(() => {
@@ -110,24 +101,18 @@ export default function App() {
       
       const layers = Array.from(elements).map((el, i) => {
         const tag = el.tagName.toLowerCase();
-        let detectedType = "path";
+        let detectedType = "vectorart";
 
-        if (tag === 'rect') {
-           const rx = parseFloat(el.getAttribute('rx') || 0);
-           detectedType = rx > 0 ? "roundrect" : "rect";
-        } else if (tag === 'circle' || tag === 'ellipse') {
-           detectedType = "roundrect";
-        } else if (tag === 'polygon' || tag === 'polyline') {
+        if (tag === 'rect') detectedType = parseFloat(el.getAttribute('rx') || 0) > 0 ? "roundrect" : "rect";
+        else if (tag === 'circle' || tag === 'ellipse') detectedType = "roundrect";
+        else if (tag === 'polygon' || tag === 'polyline') {
            const pts = (el.getAttribute('points') || '').trim().split(/[\s,]+/).filter(Boolean);
-           detectedType = pts.length === 6 ? "triangle" : "path";
-        } else if (tag === 'path') {
-           // BACA ISI DALAMAN FIGMA PATH
-           detectedType = detectPathShape(el.getAttribute('d'));
-        }
+           detectedType = pts.length === 6 ? "triangle" : "vectorart";
+        } else if (tag === 'path') detectedType = detectPathShape(el.getAttribute('d'));
+        else if (tag === 'line') detectedType = "vectorart";
 
         return {
-          id: i, 
-          exportType: detectedType,
+          id: i, exportType: detectedType,
           name: el.getAttribute('id') || `Shape_${String(i + 1).padStart(3, '0')}`,
           included: true
         };
@@ -151,7 +136,7 @@ export default function App() {
     setParsedLayers(newLayers);
   };
 
-  // KALKULATOR PATH MATEMATIKA ALIGHT MOTION
+  // PATH CALCULATOR
   const shiftPath = (d, cx, cy, scaleX, scaleY) => {
       if (!d) return "";
       let norm = d.replace(/,/g, ' ').replace(/([a-zA-Z])/g, ' $1 ').trim().replace(/\s+/g, ' ');
@@ -169,26 +154,26 @@ export default function App() {
               let c = cmd.toUpperCase();
               if (c === 'Z') {
               } else if (c === 'H') {
-                  let x = parseFloat(tokens[i]);
+                  let x = parseFloat(tokens[i]) || 0;
                   out.push((isUpper ? (x * scaleX - cx) : (x * scaleX)).toFixed(4)); i++;
               } else if (c === 'V') {
-                  let y = parseFloat(tokens[i]);
+                  let y = parseFloat(tokens[i]) || 0;
                   out.push((isUpper ? (y * scaleY - cy) : (y * scaleY)).toFixed(4)); i++;
               } else if (c === 'M' || c === 'L' || c === 'T') {
-                  let x = parseFloat(tokens[i]), y = parseFloat(tokens[i+1]);
+                  let x = parseFloat(tokens[i]) || 0, y = parseFloat(tokens[i+1]) || 0;
                   out.push((isUpper ? (x * scaleX - cx) : (x * scaleX)).toFixed(4));
                   out.push((isUpper ? (y * scaleY - cy) : (y * scaleY)).toFixed(4)); i += 2;
               } else if (c === 'Q' || c === 'S') {
-                  let x1 = parseFloat(tokens[i]), y1 = parseFloat(tokens[i+1]);
-                  let x = parseFloat(tokens[i+2]), y = parseFloat(tokens[i+3]);
+                  let x1 = parseFloat(tokens[i])||0, y1 = parseFloat(tokens[i+1])||0;
+                  let x = parseFloat(tokens[i+2])||0, y = parseFloat(tokens[i+3])||0;
                   out.push((isUpper ? (x1 * scaleX - cx) : (x1 * scaleX)).toFixed(4));
                   out.push((isUpper ? (y1 * scaleY - cy) : (y1 * scaleY)).toFixed(4));
                   out.push((isUpper ? (x * scaleX - cx) : (x * scaleX)).toFixed(4));
                   out.push((isUpper ? (y * scaleY - cy) : (y * scaleY)).toFixed(4)); i += 4;
               } else if (c === 'C') {
-                  let x1 = parseFloat(tokens[i]), y1 = parseFloat(tokens[i+1]);
-                  let x2 = parseFloat(tokens[i+2]), y2 = parseFloat(tokens[i+3]);
-                  let x = parseFloat(tokens[i+4]), y = parseFloat(tokens[i+5]);
+                  let x1 = parseFloat(tokens[i])||0, y1 = parseFloat(tokens[i+1])||0;
+                  let x2 = parseFloat(tokens[i+2])||0, y2 = parseFloat(tokens[i+3])||0;
+                  let x = parseFloat(tokens[i+4])||0, y = parseFloat(tokens[i+5])||0;
                   out.push((isUpper ? (x1 * scaleX - cx) : (x1 * scaleX)).toFixed(4));
                   out.push((isUpper ? (y1 * scaleY - cy) : (y1 * scaleY)).toFixed(4));
                   out.push((isUpper ? (x2 * scaleX - cx) : (x2 * scaleX)).toFixed(4));
@@ -196,9 +181,9 @@ export default function App() {
                   out.push((isUpper ? (x * scaleX - cx) : (x * scaleX)).toFixed(4));
                   out.push((isUpper ? (y * scaleY - cy) : (y * scaleY)).toFixed(4)); i += 6;
               } else if (c === 'A') {
-                  let rx = parseFloat(tokens[i]), ry = parseFloat(tokens[i+1]);
-                  let rot = parseFloat(tokens[i+2]), fa = parseFloat(tokens[i+3]), fs = parseFloat(tokens[i+4]);
-                  let x = parseFloat(tokens[i+5]), y = parseFloat(tokens[i+6]);
+                  let rx = parseFloat(tokens[i])||0, ry = parseFloat(tokens[i+1])||0;
+                  let rot = parseFloat(tokens[i+2])||0, fa = parseFloat(tokens[i+3])||0, fs = parseFloat(tokens[i+4])||0;
+                  let x = parseFloat(tokens[i+5])||0, y = parseFloat(tokens[i+6])||0;
                   out.push((rx * scaleX).toFixed(4)); out.push((ry * scaleY).toFixed(4));
                   out.push(rot); out.push(fa); out.push(fs);
                   out.push((isUpper ? (x * scaleX - cx) : (x * scaleX)).toFixed(4));
@@ -208,7 +193,7 @@ export default function App() {
               }
           }
       }
-      return out.join(' ');
+      return out.join(' ').replace(/NaN/g, "0.0000"); 
   };
 
   const extractPathFromNode = (node) => {
@@ -221,7 +206,27 @@ export default function App() {
     }
     if (tag === 'circle') {
       const cx = parseFloat(node.getAttribute('cx') || 0); const cy = parseFloat(node.getAttribute('cy') || 0); const r = parseFloat(node.getAttribute('r') || 0);
-      return `M ${cx} ${cy} m -${r}, 0 a ${r},${r} 0 1,0 ${r * 2},0 a ${r},${r} 0 1,0 -${r * 2},0`;
+      const c = r * 0.551915024494; 
+      return `M ${cx} ${cy - r} C ${cx + c} ${cy - r} ${cx + r} ${cy - c} ${cx + r} ${cy} C ${cx + r} ${cy + c} ${cx + c} ${cy + r} ${cx} ${cy + r} C ${cx - c} ${cy + r} ${cx - r} ${cy + c} ${cx - r} ${cy} C ${cx - r} ${cy - c} ${cx - c} ${cy - r} ${cx} ${cy - r} Z`;
+    }
+    if (tag === 'ellipse') {
+      const cx = parseFloat(node.getAttribute('cx') || 0); const cy = parseFloat(node.getAttribute('cy') || 0); 
+      const rx = parseFloat(node.getAttribute('rx') || 0); const ry = parseFloat(node.getAttribute('ry') || 0);
+      const ox = rx * 0.551915024494; const oy = ry * 0.551915024494;
+      return `M ${cx} ${cy - ry} C ${cx + ox} ${cy - ry} ${cx + rx} ${cy - oy} ${cx + rx} ${cy} C ${cx + rx} ${cy + oy} ${cx + ox} ${cy + ry} ${cx} ${cy + ry} C ${cx - ox} ${cy + ry} ${cx - rx} ${cy + oy} ${cx - rx} ${cy} C ${cx - rx} ${cy - oy} ${cx - ox} ${cy - ry} ${cx} ${cy - ry} Z`;
+    }
+    if (tag === 'polygon' || tag === 'polyline') {
+      const pts = (node.getAttribute('points') || '').trim().split(/[\s,]+/).filter(Boolean);
+      if (pts.length < 2) return '';
+      let d = `M ${pts[0]} ${pts[1]} `;
+      for (let i = 2; i < pts.length; i += 2) if (pts[i+1] !== undefined) d += `L ${pts[i]} ${pts[i+1]} `;
+      if (tag === 'polygon') d += 'Z';
+      return d;
+    }
+    if (tag === 'line') {
+      let x1 = parseFloat(node.getAttribute('x1') || 0), y1 = parseFloat(node.getAttribute('y1') || 0);
+      let x2 = parseFloat(node.getAttribute('x2') || 0), y2 = parseFloat(node.getAttribute('y2') || 0);
+      return `M ${x1} ${y1} L ${x2} ${y2}`;
     }
     return '';
   };
@@ -232,11 +237,11 @@ export default function App() {
       for(let i=0; i<norm.length; i++) {
         let up = norm[i].toUpperCase();
         if(up==='M' || up==='L') { 
-            currentX = parseFloat(norm[i+1]); currentY = parseFloat(norm[i+2]);
+            currentX = parseFloat(norm[i+1])||0; currentY = parseFloat(norm[i+2])||0;
             pts.push({x: currentX*scaleX, y: currentY*scaleY}); i+=2; 
         }
-        else if(up==='H') { currentX = parseFloat(norm[i+1]); pts.push({x: currentX*scaleX, y: currentY*scaleY}); i++; }
-        else if(up==='V') { currentY = parseFloat(norm[i+1]); pts.push({x: currentX*scaleX, y: currentY*scaleY}); i++; }
+        else if(up==='H') { currentX = parseFloat(norm[i+1])||0; pts.push({x: currentX*scaleX, y: currentY*scaleY}); i++; }
+        else if(up==='V') { currentY = parseFloat(norm[i+1])||0; pts.push({x: currentX*scaleX, y: currentY*scaleY}); i++; }
       }
       let uniquePts = [];
       pts.forEach(p => {
@@ -302,35 +307,104 @@ export default function App() {
     let bgHex = '#ff000000';
     if (bgColor) bgHex = '#ff' + bgColor.replace('#', '').toLowerCase();
 
-    // HEADER XML
     let xml = `<?xml version='1.0' encoding='UTF-8' ?>\n`;
     xml += `<scene title="SVG_AM_Export" width="${Math.round(canvasW)}" height="${Math.round(canvasH)}" exportWidth="${Math.round(canvasW)}" exportHeight="${Math.round(canvasH)}" precompose="dynamicResolution" bgcolor="${bgHex}" totalTime="${duration}" fps="${fps}" modifiedTime="0" amver="1028417" ffver="106" am="com.alightcreative.motion/5.0.273.1028417" amplatform="android" retime="freeze" retimeAdaptFPS="false">\n`;
 
-    const parseColor = (node, attrType) => {
-      let svgColor = node.getAttribute(attrType) || node.style?.[attrType];
-      if (attrType === 'fill' && !node.hasAttribute('fill') && !node.style?.fill) svgColor = '#000000'; 
-      if (!svgColor || svgColor === 'none') return '#00000000'; 
-      
-      let hex = '#ff000000'; 
-      if (svgColor === 'currentColor') hex = '#ff000000'; 
-      else if (svgColor.startsWith('#')) {
-        let temp = svgColor.substring(1).toLowerCase();
-        if (temp.length === 3) temp = temp.split('').map(c => c + c).join(''); 
-        if (temp.length === 6) hex = '#ff' + temp; 
-        else if (temp.length === 8) hex = '#' + temp.substring(6, 8) + temp.substring(0, 6);
-        else hex = '#ff' + temp;
-      }
-      
-      let finalOpacity = opacity;
-      let attrOpacity = parseFloat(node.getAttribute(`${attrType}-opacity`) || node.style?.[`${attrType}Opacity`] || 1);
-      if (attrOpacity < 1) finalOpacity = opacity * attrOpacity;
+    // =======================================================
+    // MESIN PENDETEKSI GRADASI & NORMALISASI KOORDINAT (BARU)
+    // =======================================================
+    const getFillData = (node, opacityGlobal, nodeRect, containerRect) => {
+        let fillAttr = node.getAttribute('fill') || node.style?.fill;
+        if (!fillAttr && !node.hasAttribute('fill') && !node.style?.fill) fillAttr = '#000000';
+        if (!fillAttr || fillAttr === 'none') return { type: 'color', color: '#00000000', tag: '' };
 
-      if (finalOpacity < 1) {
-        let aa = parseInt(hex.substring(1, 3), 16);
-        aa = Math.round(aa * finalOpacity);
-        hex = '#' + aa.toString(16).padStart(2, '0').toLowerCase() + hex.substring(3);
-      }
-      return hex;
+        const toHexAM = (colorStr, op) => {
+            if (!colorStr) return '#FF000000';
+            let hex = '#ff000000';
+            if (colorStr === 'currentColor') hex = '#ff000000';
+            else if (colorStr.startsWith('#')) {
+                let temp = colorStr.substring(1).toLowerCase();
+                if (temp.length === 3) temp = temp.split('').map(c => c + c).join('');
+                if (temp.length === 6) hex = '#ff' + temp;
+                else if (temp.length === 8) hex = '#' + temp.substring(6, 8) + temp.substring(0, 6);
+                else hex = '#ff' + temp;
+            }
+            if (op < 1) {
+                let aa = parseInt(hex.substring(1, 3), 16);
+                aa = Math.max(0, Math.min(255, Math.round(aa * op)));
+                hex = '#' + aa.toString(16).padStart(2, '0').toLowerCase() + hex.substring(3);
+            }
+            return hex.toUpperCase(); 
+        };
+
+        let nodeOpacity = parseFloat(node.getAttribute('fill-opacity') || node.style?.fillOpacity || 1);
+        let finalOpacity = opacityGlobal * nodeOpacity;
+
+        // Cek jika fill adalah referensi Gradient "url(#...)"
+        if (fillAttr.includes('url(')) {
+            let match = fillAttr.match(/url\(['"]?#([^'")]+)['"]?\)/);
+            if (match && match[1]) {
+                // FIX BESAR: Harus pake querySelector agar support struktur SVG murni
+                let gradEl = doc.querySelector(`[id="${match[1]}"]`);
+                if (gradEl) {
+                    let isRadial = gradEl.tagName.toLowerCase() === 'radialgradient';
+                    let stops = gradEl.querySelectorAll('stop');
+
+                    if (stops.length > 0) {
+                        let startStop = stops[0];
+                        let endStop = stops[stops.length - 1];
+
+                        let startColorRaw = startStop.getAttribute('stop-color') || startStop.style?.stopColor || '#000000';
+                        let endColorRaw = endStop.getAttribute('stop-color') || endStop.style?.stopColor || '#FFFFFF';
+
+                        let startOpRaw = parseFloat(startStop.getAttribute('stop-opacity') ?? startStop.style?.stopOpacity ?? 1);
+                        let endOpRaw = parseFloat(endStop.getAttribute('stop-opacity') ?? endStop.style?.stopOpacity ?? 1);
+
+                        let startColor = toHexAM(startColorRaw, finalOpacity * startOpRaw);
+                        let endColor = toHexAM(endColorRaw, finalOpacity * endOpRaw);
+
+                        // NORMALISASI KOORDINAT GRADASI (0.0 sampai 1.0)
+                        let x1 = gradEl.getAttribute('x1');
+                        let y1 = gradEl.getAttribute('y1');
+                        let x2 = gradEl.getAttribute('x2');
+                        let y2 = gradEl.getAttribute('y2');
+
+                        const parseCoordX = (c, defaultVal) => {
+                            if (!c) return defaultVal.toFixed(6);
+                            if (c.endsWith('%')) return (parseFloat(c)/100).toFixed(6);
+                            let val = parseFloat(c);
+                            // Kalau angkanya kegedean (berarti format Piksel, harus kita normalkan ke 0.0 - 1.0)
+                            if (Math.abs(val) > 2 && nodeRect && containerRect) {
+                                let norm = (val - (nodeRect.left - containerRect.left)) / (nodeRect.width || 1);
+                                if (!isNaN(norm)) return norm.toFixed(6);
+                            }
+                            return (isNaN(val) ? defaultVal : val).toFixed(6);
+                        };
+
+                        const parseCoordY = (c, defaultVal) => {
+                            if (!c) return defaultVal.toFixed(6);
+                            if (c.endsWith('%')) return (parseFloat(c)/100).toFixed(6);
+                            let val = parseFloat(c);
+                            if (Math.abs(val) > 2 && nodeRect && containerRect) {
+                                let norm = (val - (nodeRect.top - containerRect.top)) / (nodeRect.height || 1);
+                                if (!isNaN(norm)) return norm.toFixed(6);
+                            }
+                            return (isNaN(val) ? defaultVal : val).toFixed(6);
+                        };
+
+                        let startStr = `${parseCoordX(x1, 0.0)},${parseCoordY(y1, 0.0)}`;
+                        let endStr = `${parseCoordX(x2, 1.0)},${parseCoordY(y2, 1.0)}`;
+
+                        let tag = `    <gradient type="${isRadial ? 'radial' : 'linear'}" startColor="${startColor}" endColor="${endColor}" start="${startStr}" end="${endStr}"/>\n`;
+
+                        // Alight Motion mewajibkan fillColor Hitam Pekat kalo ada Gradient
+                        return { type: 'gradient', color: '#FF000000', tag: tag };
+                    }
+                }
+            }
+        }
+
+        return { type: 'color', color: toHexAM(fillAttr, finalOpacity), tag: '' };
     };
 
     domElements.forEach((node, index) => {
@@ -338,7 +412,8 @@ export default function App() {
       if (!layerState || !layerState.included) return;
 
       const tag = node.tagName.toLowerCase();
-      const exportType = layerState.exportType; // Mengambil tipe dari drop-down / auto-detect
+      const exportType = exportMode === 'vectorart' ? 'vectorart' : layerState.exportType; 
+      
       let sType = ""; let extraProps = "";
       
       const rect = node.getBoundingClientRect();
@@ -349,10 +424,6 @@ export default function App() {
       
       let cx = (rect.left - svgRect.left) * scaleX + (w / 2);
       let cy = (rect.top - svgRect.top) * scaleY + (h / 2);
-
-      // ==================================================
-      // EKSEKUSI PEMBENTUKAN SHAPE BERDASARKAN DETEKSI
-      // ==================================================
 
       if (exportType === 'triangle') {
          sType = ".triangle"; 
@@ -374,13 +445,11 @@ export default function App() {
          if (tPts) {
              let minX = Math.min(tPts[0].x, tPts[1].x, tPts[2].x); let maxX = Math.max(tPts[0].x, tPts[1].x, tPts[2].x);
              let minY = Math.min(tPts[0].y, tPts[1].y, tPts[2].y); let maxY = Math.max(tPts[0].y, tPts[1].y, tPts[2].y);
-             cx = (minX + maxX) / 2;
-             cy = (minY + maxY) / 2;
+             cx = (minX + maxX) / 2; cy = (minY + maxY) / 2;
              extraProps += `    <property name="p1" type="vec2" value="${(tPts[0].x - cx).toFixed(6)},${(tPts[0].y - cy).toFixed(6)}" />\n`;
              extraProps += `    <property name="p2" type="vec2" value="${(tPts[1].x - cx).toFixed(6)},${(tPts[1].y - cy).toFixed(6)}" />\n`;
              extraProps += `    <property name="p3" type="vec2" value="${(tPts[2].x - cx).toFixed(6)},${(tPts[2].y - cy).toFixed(6)}" />\n`;
          } else {
-             // Fallback bounding box
              extraProps += `    <property name="p1" type="vec2" value="0.000000,-${(h/2).toFixed(6)}" />\n`;
              extraProps += `    <property name="p2" type="vec2" value="${(w/2).toFixed(6)},${(h/2).toFixed(6)}" />\n`;
              extraProps += `    <property name="p3" type="vec2" value="-${(w/2).toFixed(6)},${(h/2).toFixed(6)}" />\n`;
@@ -403,26 +472,25 @@ export default function App() {
          sType = ".rect";
          extraProps += `    <property name="size" type="vec2" value="${w.toFixed(6)},${h.toFixed(6)}" />\n`;
       }
-      else if (exportType === 'path') {
-         sType = ""; // INI KUNCI UTAMA SHAPE_004 (BENTUK PATH MURNI TANPA s="")
-         cx = canvasW / 2; 
-         cy = canvasH / 2;
-         let d = tag === 'path' ? node.getAttribute('d') : extractPathFromNode(node);
+      else if (exportType === 'vectorart') {
+         sType = ""; 
+         cx = canvasW / 2; cy = canvasH / 2;
+         let d = extractPathFromNode(node); 
          extraProps += `    <path d="${shiftPath(d, cx, cy, scaleX, scaleY)}" />\n`;
       }
 
-      const fillColor = parseColor(node, 'fill');
+      // PANNGIL MESIN WARNA & GRADASI BARU
+      const fillData = getFillData(node, opacity, rect, svgRect);
       
-      // OUTLINE STROKE
       if (includeStroke) {
         const strokeColorRaw = node.getAttribute('stroke') || node.style?.stroke;
         if (strokeColorRaw && strokeColorRaw !== 'none') {
-            const strokeColor = parseColor(node, 'stroke');
+            const strokeData = getFillData({ getAttribute: (k) => k==='fill' ? strokeColorRaw : null, style: {} }, opacity, rect, svgRect);
             let strokeWidth = parseFloat(node.getAttribute('stroke-width') || node.style?.strokeWidth);
             if (isNaN(strokeWidth)) strokeWidth = 2.0; 
             strokeWidth = strokeWidth * ((scaleX + scaleY) / 2);
 
-            extraProps += `    <strokeColor value="${strokeColor}" />\n`;
+            extraProps += `    <strokeColor value="${strokeData.color}" />\n`;
             extraProps += `    <property name="strokeWidth" type="float" value="${strokeWidth.toFixed(6)}" />\n`;
         }
       }
@@ -430,19 +498,22 @@ export default function App() {
       const shapeId = 2000 + index;
       const label = layerState.name;
 
-      // CETAK TAG SHAPE SESUAI REQUEST ANDA (ADA YANG PAKE s= ADA YANG NGGAK)
-      let shapeStr = `  <shape id="${shapeId}" label="${label}" startTime="0" endTime="${duration}" fillType="color" mediaFillMode="fill"`;
-      if (sType !== "") {
-         shapeStr += ` s="${sType}">\n`; 
-      } else {
-         shapeStr += `>\n`; 
-      }
+      // CETAK TAG SHAPE DENGAN FILLTYPE YANG BENAR
+      let shapeStr = `  <shape id="${shapeId}" label="${label}" startTime="0" endTime="${duration}" fillType="${fillData.type}" mediaFillMode="fill"`;
+      if (sType !== "") shapeStr += ` s="${sType}">\n`; 
+      else shapeStr += `>\n`; 
 
       xml += shapeStr;
       xml += `    <transform>\n`;
       xml += `      <location value="${cx.toFixed(6)},${cy.toFixed(6)},0.000000" />\n`;
       xml += `    </transform>\n`;
-      xml += `    <fillColor value="${fillColor}" />\n`;
+      xml += `    <fillColor value="${fillData.color}" />\n`;
+      
+      // Sisipkan Tag Gradasi (Jika Ditemukan)
+      if (fillData.tag) {
+          xml += fillData.tag;
+      }
+
       xml += extraProps;
       xml += `  </shape>\n`;
     });
@@ -465,7 +536,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'alight_motion_smart_export.xml';
+    a.download = 'alight_motion_gradient_support.xml';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -487,6 +558,32 @@ export default function App() {
         <div className="flex flex-col gap-8">
           
           <PixelWindow title="Project Configuration" icon={Settings2}>
+            <div className="mb-5 bg-[#E5CBA8] p-3 border-[4px] border-[#5A3A22]">
+              <label className="text-[8px] text-[#5A3A22] mb-3 block font-bold">GLOBAL EXPORT MODE:</label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setExportMode('hybrid')}
+                  className="text-[8px] p-2 active:translate-y-1 transition-transform"
+                  style={{
+                    backgroundColor: exportMode === 'hybrid' ? '#5A3A22' : '#FFF5EB', 
+                    color: exportMode === 'hybrid' ? '#FFAD60' : '#5A3A22',
+                    boxShadow: exportMode === 'hybrid' ? 'none' : 'inset -2px -2px 0px 0px #E5CBA8, 0 0 0 2px #5A3A22',
+                    border: exportMode === 'hybrid' ? '2px solid #5A3A22' : 'none', margin: '2px'
+                  }}
+                >✅ SMART HYBRID (Auto-Detect)</button>
+                <button
+                  onClick={() => setExportMode('vectorart')}
+                  className="text-[8px] p-2 active:translate-y-1 transition-transform"
+                  style={{
+                    backgroundColor: exportMode === 'vectorart' ? '#5A3A22' : '#FFF5EB', 
+                    color: exportMode === 'vectorart' ? '#FFAD60' : '#5A3A22',
+                    boxShadow: exportMode === 'vectorart' ? 'none' : 'inset -2px -2px 0px 0px #E5CBA8, 0 0 0 2px #5A3A22',
+                    border: exportMode === 'vectorart' ? '2px solid #5A3A22' : 'none', margin: '2px'
+                  }}
+                >🎨 PURE VECTOR ART (Force Paths)</button>
+              </div>
+            </div>
+
             <div className="mb-5">
               <label className="text-[8px] text-[#5A3A22] mb-3 block">CANVAS RATIO:</label>
               <div className="flex flex-wrap gap-2">
@@ -607,7 +704,7 @@ export default function App() {
           <div className="flex-1 min-h-[250px]">
             <PixelWindow 
               title="Shape Auto-Detection & Selection" icon={Layers}
-              rightHeader={<span className="text-[8px] bg-[#FFAD60] text-[#5A3A22] px-2 py-1 border-[2px] border-[#5A3A22]">{parsedLayers.filter(l=>l.included).length} SELECTED</span>}
+              rightHeader={<span className="text-[8px] bg-[#FFAD60] text-[#5A3A22] px-2 py-1 border-[2px] border-[#5A3A22]">{parsedLayers.filter(l=>l.included).length} ITEMS</span>}
             >
                <div className="h-full bg-[#5A3A22] border-[4px] border-[#5A3A22] p-2 overflow-y-auto">
                   {parsedLayers.length > 0 ? (
@@ -628,14 +725,15 @@ export default function App() {
                           />
                           <div className="relative w-24">
                             <select 
-                              value={layer.exportType}
+                              value={exportMode === 'vectorart' ? 'vectorart' : layer.exportType}
+                              disabled={exportMode === 'vectorart'}
                               onChange={(e) => updateLayer(idx, 'exportType', e.target.value)}
-                              className="w-full appearance-none bg-[#FFF5EB] border-[2px] border-[#5A3A22] px-2 py-1 text-[8px] focus:outline-none text-[#5A3A22] font-bold"
+                              className={`w-full appearance-none ${exportMode === 'vectorart' ? 'bg-[#E5CBA8] opacity-60' : 'bg-[#FFF5EB]'} border-[2px] border-[#5A3A22] px-2 py-1 text-[8px] focus:outline-none text-[#5A3A22] font-bold`}
                             >
                               <option value="rect">.rect</option>
                               <option value="roundrect">.roundrect</option>
                               <option value="triangle">.triangle</option>
-                              <option value="path">path murni</option>
+                              <option value="vectorart">Vector Art (Path)</option>
                             </select>
                             <ChevronDown className="absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none text-[#5A3A22]" size={10} />
                           </div>
